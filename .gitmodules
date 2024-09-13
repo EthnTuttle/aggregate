@@ -1,0 +1,6 @@
+[submodule "cross-input-aggregation"]
+	path = cross-input-aggregation
+	url = https://github.com/BlockstreamResearch/cross-input-aggregation
+[submodule "secp256kfun"]
+	path = secp256kfun
+	url = https://github.com/LLFourn/secp256kfun.git

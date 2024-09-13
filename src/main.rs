@@ -1,6 +1,9 @@
-use secp256k1::{
-    hashes::{sha256, Hash}, rand::rngs::OsRng, schnorr::Signature, Keypair, Message, PublicKey, Secp256k1
-};
+use std::io::Read;
+
+use rand::rngs::ThreadRng;
+use schnorr_fun::{Message, Schnorr, Signature};
+use secp256kfun::{hash, marker::{NonZero, Public, Zero}, nonce, Point, Scalar, Tag};
+use sha2::{Digest, Sha256};
 
 // Functions and operations:
 //
@@ -20,27 +23,101 @@ use secp256k1::{
 // The function hashtag(x) where tag is a UTF-8 encoded tag name and x is a byte array returns the 32-byte hash SHA256(SHA256(tag) || SHA256(tag) || x).
 
 fn main() {
-    let secp = Secp256k1::new();
-    let (private_key_1, _public_key_1) = secp.generate_keypair(&mut OsRng);
-    let digest_1 = sha256::Hash::hash("be peaceful, not harmless".as_bytes());
-    let message_1 = Message::from_digest(digest_1.to_byte_array());
+    // Use synthetic nonces
+    let nonce_gen = nonce::Synthetic::<Sha256, nonce::GlobalRng<ThreadRng>>::default();
+    let schnorr = Schnorr::<Sha256, _>::new(nonce_gen.clone());
+    // Generate your public/private key-pair
+    let keypair = schnorr.new_keypair(Scalar::random(&mut rand::thread_rng()));
+    // Sign a variable length message
+    let message = Message::<Public>::plain(
+        "the-times-of-london",
+        b"Chancellor on brink of second bailout for banks",
+    );
+    // Sign the message with our keypair
+    let signature = schnorr.sign(&keypair, message);
 
-    let _sig_1 = secp.sign_schnorr(&message_1, &Keypair::from_secret_key(&secp, &private_key_1));
-
-
-    let (private_key_2, _public_key_2) = secp.generate_keypair(&mut OsRng);
-    let digest_2 = sha256::Hash::hash("be peaceful, not harmless 2".as_bytes());
-    let message_2 = Message::from_digest(digest_2.to_byte_array());
-
-    let _sig_2 = secp.sign_schnorr(&message_2, &Keypair::from_secret_key(&secp, &private_key_2));
-
-
+    // Get the verifier's key
+    let verification_key = keypair.public_key();
+    // Check it's valid 🍿
+    assert!(schnorr.verify(&verification_key, message, &signature));
 }
 
-struct AggregateSignature {}
+struct PubKeyMessageTuple {
+    pub public_key: Point,
+    // because the message is a hash, I think
+    pub message: [u8; 32],
+}
 
-fn aggregate(pubkeys: Vec<PublicKey>, message: Message, signature: Signature) -> AggregateSignature {
+struct PubKeyMessageRValueTriple {
+    pub public_key: Point,
+    pub message: [u8; 32],
+    // a signature is 64bytes, 32 byte r and 32 byte s, 
+    pub r: [u8; 32]
+}
+
+struct PubkeyMessageSignatureTriple {
+    public_key: Point,
+    message: [u8; 32],
+    signature: Signature,
+}
+
+type AggregateSignature = Vec<u8>;
+
+fn incremental_aggregation(
+    aggregate_signature: Vec<u8>,
+    pubkey_message_tuple: Vec<PubKeyMessageTuple>,
+    pubkey_message_signature_triples: Vec<PubkeyMessageSignatureTriple>,
+) -> AggregateSignature {
+    let tag: &[u8] = "HalfAgg/randomizer".as_bytes();
+    let mut hash_tag = Sha256::default();
+    hash_tag.update(tag);
+    let tag_hash = hash_tag.finalize().as_slice();
+    // Fail if v + u >= 2^16
+    let two_to_the_sixteenth = 2_u32.pow(16);
+    if pubkey_message_tuple.len() + pubkey_message_signature_triples.len() >= two_to_the_sixteenth.try_into().unwrap() {
+        panic!()
+    }
+    // Fail if len(aggsig) ≠ 32 * (v + 1)
+    if aggregate_signature.len() != 32_u32* (pubkey_message_tuple.len() + 1) {
+        panic!()
+    }
+    // For i = 0 .. v-1:
+    //  Let (pki, mi) = pm_aggdi
+    //  Let ri = aggsig[i⋅32:(i+1)⋅32]
+    // extracting the r from the already aggregated signatures (r, s)
+    // because we'll need to concatenate these in order to form the final aggregate signature
+    let mut pubkey_message_tuples_r_values = vec![];
+    for i in 0..pubkey_message_tuple.len() {
+        // Let (pki, mi) = pm_aggd[i]
+        let PubKeyMessageTuple { public_key, message } = pubkey_message_tuple[i];
+        // Let ri = aggsig[i⋅32:(i+1)⋅32]
+        let start = i * 32;
+        let end = (i + 1) * 32;
+        let r = &aggregate_signature[start..end];
+        pubkey_message_tuples_r_values.push(
+            PubKeyMessageRValueTriple {
+                public_key,
+                message,
+                r: r.try_into().unwrap()
+            }
+        );
+    }
+    // now we deconstruct the signature for the ones to be aggregated and combine the s values
+    for i in pubkey_message_tuple.len()..(pubkey_message_tuple.len() + pubkey_message_signature_triples.len()) {
+        let PubkeyMessageSignatureTriple { public_key, message, signature } = pubkey_message_signature_triples[i];
+        let r = signature.R;
+        let s = signature.s;
+        let z: Scalar;
+        if i == 0 {
+            z = Scalar::one();
+        } else {
+            let to_be_hashed = pubkey_message_signature_triples[i];
+            
+        }
+    }
+
+
+    // the final aggregated signature is all the r values and then the final s value.
+
     todo!()
 }
-
-fn IncAggregate(agg_sig: AggregateSignature, Vec<PublicKey>,)
